@@ -47,18 +47,24 @@ void OnCommand(HWND hWnd, int id, HWND hWndCtl, UINT codeNotify) {
    }
 }
 
-int FindStockInL2Ticks(CSTOCKDATAS *pStockData, int nStockCode)
+int FindStockInL2Ticks(HWND hWnd, CSTOCKDATAS *pStockData, int nStockCode)
 {
 	int nReturn = -1;
+	char szTmp[128] = { 0 };
 	static int nCount = 0;
 
 	if (nStockCode > 0)
 	{
-		for (nReturn = 0; nReturn < nCount && pStockData[nReturn].m_nStockCode>0; nReturn++)
-			if (pStockData[nReturn].m_nStockCode == nStockCode)
-				break;
+		sprintf_s(szTmp, "stock changed to %06d", nStockCode);
+		g_usrDisplay.AddMsg(hWnd, szTmp);
 
-		if (nReturn == nCount )
+		for (nReturn = 0; nReturn < MAXSTOCKS ; nReturn++)
+			if (pStockData[nReturn].m_nStockCode == nStockCode || pStockData[nReturn].m_nStockCode == 0)
+			{
+				return nReturn;//old stock code ,just return the old index
+			}
+		
+		//list full ,replace oldest index
 		{
 			nCount++;
 			if (nCount >= MAXSTOCKS)
@@ -66,24 +72,60 @@ int FindStockInL2Ticks(CSTOCKDATAS *pStockData, int nStockCode)
 				nCount = 0;
 				nReturn = 0;//循环使用列表
 			}
+			else
+				nReturn = nCount;
 		}
+		//代码变化了，ticks和k cap数据均无效
+		pStockData[nReturn].m_nCapitalFlowRecords = 0;
+		pStockData[nReturn].m_nTickCount = 0;
 	}
 
 	return nReturn;
+	
 }
 
 ///////////////////////////////////////////////////////////////////////////////
 //处理被注入的窗体的返回的信息
 
 BOOL OnCopyData(HWND hWnd, HWND hWndFrom, PCOPYDATASTRUCT pcds) {
-	static int nStockCode = 0, nTradeDate = 0, nStockIndex=0;
+	static int nStockCode = 0, nTradeDate = 0, nStockIndex=0,nLastCode=0;
 	char  szTmp[260] = {0};
 	switch (pcds->dwData)
 	{
 	case 0x99:
 		nStockCode = *(DWORD*)(((BYTE*)pcds->lpData));
 		nTradeDate = *(DWORD*)(((BYTE*)pcds->lpData+4));
-		nStockIndex =FindStockInL2Ticks(g_usrStockData, nStockCode);
+		
+		if (nStockCode != nLastCode)
+		{
+			CSTOCKDATAS *ptrStock = &g_usrStockData[nStockIndex];
+			if (g_nAutoClickMode == ID_HOT_GET_L2TICKS && g_usrStockData[nStockIndex].SaveTicksData())
+			{
+				sprintf_s(szTmp, "SAVE %06d  ticks data,Index=%d,len=%d,time=[%06d,%06d]",
+					ptrStock->m_nStockCode, nStockIndex,
+					ptrStock->m_nTickCount,
+					ptrStock->m_pL2Ticks[0].m_nTime,
+					ptrStock->m_pL2Ticks[ptrStock->m_nTickCount-1].m_nTime);
+
+				g_usrDisplay.AddMsg(hWnd, szTmp);
+			}
+
+			//股票代码变化时存储当前标的的k线资金流信息到文件
+			if (g_nAutoClickMode == ID_HOT_GET_CAPITAL && g_usrStockData[nStockIndex].SaveCapitalData())
+			{
+				sprintf_s(szTmp, "SAVE %06d  flow data,Index=%d,len=%d,date:[%d,%d]",
+					ptrStock->m_nStockCode, nStockIndex,
+					ptrStock->m_nCapitalFlowRecords, 
+					ptrStock->m_pCapitalFlow[0].m_nDate,
+					ptrStock->m_pCapitalFlow[ptrStock->m_nCapitalFlowRecords - 1].m_nDate);
+
+				g_usrDisplay.AddMsg(hWnd, szTmp);
+			}
+
+			nStockIndex = FindStockInL2Ticks(hWnd, g_usrStockData, nStockCode);
+			nLastCode = nStockCode;
+		}
+		
 		break;
 
 	case 0x100:
@@ -92,14 +134,8 @@ BOOL OnCopyData(HWND hWnd, HWND hWndFrom, PCOPYDATASTRUCT pcds) {
 		{
 			g_usrStockData[nStockIndex].m_nStockCode = nStockCode;
 			g_usrStockData[nStockIndex].m_nTradeDate = nTradeDate;
-			if(g_usrStockData[nStockIndex].AddL2Ticks(pcds))
-				if (g_usrStockData[nStockIndex].SaveTicksData())
-				{
-					sprintf_s(szTmp, "SAVE %06d  ticks data,Index=%d",
-						g_usrStockData[nStockIndex].m_nStockCode,g_nAllStocksCount);
-
-					g_usrDisplay.AddMsg(hWnd, szTmp);
-				}
+			(g_usrStockData[nStockIndex].AddL2Ticks(pcds));
+				
 		}
 		
 		break;
@@ -112,15 +148,6 @@ BOOL OnCopyData(HWND hWnd, HWND hWndFrom, PCOPYDATASTRUCT pcds) {
 			g_usrStockData[nStockIndex].m_nTradeDate = nTradeDate;
 			if (g_usrStockData[nStockIndex].AddCapitalFlow(pcds))
 			{
-				
-				if (g_usrStockData[nStockIndex].SaveCapitalData())
-				{
-					sprintf_s(szTmp, "SAVE %06d  flow data,Index=%d",
-						g_usrStockData[nStockIndex].m_nStockCode,g_nAllStocksCount);
-
-					g_usrDisplay.AddMsg(hWnd, szTmp);
-				}
-				
 				//g_usrTAQueue.PushData(nStockIndex, STOCKDATACHANGE_CAPITALFLOW);
 			}
 				
@@ -160,6 +187,26 @@ BOOL OnInitDialog(HWND hWnd, HWND hWndFocus, LPARAM lParam) {
 	return(TRUE);
 }
 
+//注册热键
+void regVirtualMouseHotKey(HWND hwnd)
+{
+	RegisterHotKey(hwnd, ID_HOT_GET_CAPITAL, MOD_CONTROL, VK_F10);			//注册 Ctrl + f10 , 资金流获取
+	RegisterHotKey(hwnd, ID_HOT_GET_L2TICKS, MOD_CONTROL, VK_F11);			//注册 Ctrl + f11 , L2 ticks
+	RegisterHotKey(hwnd, ID_HOT_GET_CAPITAL_AND_KLINE, MOD_CONTROL, VK_F12);			//注册 Ctrl + 12 , ID_HOT_GET_CAPITAL_AND_KLINE
+}
+
+
+//撤销注册的热键
+void destroyRegedHotKey(HWND hwnd)
+{
+	int hotID = ID_HOT_UP;
+	for (hotID; hotID <= ID_HOT_MIDDLE_PRESS; hotID++)
+		UnregisterHotKey(hwnd, hotID);
+
+	EndDialog(hwnd, 0);
+}
+
+
 INT_PTR WINAPI DlgProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
 
 	char		szTmp[260] = { 0 };
@@ -170,12 +217,13 @@ INT_PTR WINAPI DlgProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
 		chHANDLE_DLGMSG(hWnd, WM_INITDIALOG, OnInitDialog);
 		chHANDLE_DLGMSG(hWnd, WM_SIZE, OnSize);
 		chHANDLE_DLGMSG(hWnd, WM_COMMAND, OnCommand);
+		chHANDLE_DLGMSG(hWnd, WM_CLOSE, destroyRegedHotKey);
 
 		case WM_CREATE:						//创建创建时的相关初始化
 			regVirtualMouseHotKey(hWnd);
 			break;
 		case WM_HOTKEY:						//处理热键消息
-			dealWithHotKey(hWnd, wParam);			
+			OnHotKey(hWnd, wParam);			
 			return 0;
 		case WM_ACTIVATE:
 			/*sprintf_s(szTmp, "数据保存完毕，按CTRL---F10/F11启动数据捕获");
@@ -220,27 +268,11 @@ void CALLBACK OnTimer(
 	
 //////////////////////////////////////////////////////////////////////////
 
-//注册热键
-void regVirtualMouseHotKey(HWND hwnd)
-{
-	RegisterHotKey(hwnd, ID_HOT_GET_CAPITAL, MOD_CONTROL, VK_F10);			//注册 Ctrl + f10 , 资金流获取
-	RegisterHotKey(hwnd, ID_HOT_GET_L2TICKS, MOD_CONTROL, VK_F11);			//注册 Ctrl + f11 , L2 ticks
-	RegisterHotKey(hwnd, ID_HOT_GET_CAPITAL_AND_KLINE, MOD_CONTROL, VK_F12);			//注册 Ctrl + 12 , ID_HOT_GET_CAPITAL_AND_KLINE
-}
-
-
-//撤销注册的热键
-void destroyRegedHotKey(HWND hwnd)
-{
-	int hotID = ID_HOT_UP;
-	for (hotID; hotID <= ID_HOT_MIDDLE_PRESS; hotID++)
-		UnregisterHotKey(hwnd, hotID);
-}
 
 
 
 //处理热键消息
-void dealWithHotKey(HWND hwnd, WPARAM wParam)
+void OnHotKey(HWND hwnd, WPARAM wParam)
 {
 	POINT ptCorPos;
 	GetCursorPos(&ptCorPos);
@@ -291,7 +323,7 @@ void dealWithHotKey(HWND hwnd, WPARAM wParam)
 				SetWindowPos(m_hWnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
 				GetCursorPos(&m_ptCorPos);
 				KillTimer(NULL, ID_HOT_GET_L2TICKS);
-				SetTimer(NULL, ID_HOT_GET_L2TICKS, 1500, OnTimer);
+				SetTimer(NULL, ID_HOT_GET_L2TICKS,1500, OnTimer);
 			}
 			else if(g_nAutoClickMode== ID_HOT_GET_L2TICKS)
 			{

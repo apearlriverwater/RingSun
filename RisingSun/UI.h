@@ -5,8 +5,8 @@
 //extern CINTEGER_QUEUE g_usrTAQueue;
 extern CSTOCKDATAS g_usrStockData[MAXSTOCKS];
 
-int FindStockInL2Ticks(CSTOCKDATAS *pStockData, int nStockCode);
-void dealWithHotKey(HWND hwnd, WPARAM wParam);
+int FindStockInL2Ticks(HWND hWnd, CSTOCKDATAS *pStockData, int nStockCode);
+void OnHotKey(HWND hwnd, WPARAM wParam);
 void regVirtualMouseHotKey(HWND hwnd);
 int  InitUI(HINSTANCE hInstExe);
 void   AddData2ReadDFCFThreadQueue(int , int , int );
@@ -30,7 +30,7 @@ public:
 		time(&now);
 		timeinfo = localtime(&now);
 		sprintf_s(szBuf, "[%02d:%02d:%02d] %s", 
-			timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec,  szMsg);
+			timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec, szMsg);
 
 		int nMsgLen = strlen(szBuf);
 

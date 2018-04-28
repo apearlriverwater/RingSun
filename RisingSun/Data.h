@@ -50,7 +50,7 @@
 #define RISINGSUN_BUY			1  //BUY 
 #define RISINGSUN_SELL			2  //SELL
 
-#define  MAXSTOCKS  100
+#define  MAXSTOCKS  10
 typedef struct  tagL2DETAIL
 {
 	DWORD dwTime;
@@ -942,7 +942,40 @@ public:
 
 		if (m_nCapitalFlowRecords != nNewCount)
 		{
-			m_nCapitalFlowRecords = nNewCount;
+			//按时间先后合成数据，尽可能保留不同时间的数据
+			i =0;
+			ptr = (CAPITALFLOWSTRUCK*)((BYTE*)pcds->lpData + i * sizeof(CAPITALFLOWSTRUCK));
+			if (m_nCapitalFlowRecords>0)
+				if (m_nCapitalFlowRecords + 1 < nNewCount) //首项纪录时间相等且新纪录数据项更多
+				{
+					if (ptr->m_nDate == m_pCapitalFlow[i].m_nDate
+						&& ptr->m_nTime == m_pCapitalFlow[i].m_nTime
+						&& ptr->m_dblSmallBuy == m_pCapitalFlow[i].m_dblSmallBuy
+						&& ptr->m_dblSmallSell == m_pCapitalFlow[i].m_dblSmallSell)
+						nNewIndex = m_nCapitalFlowRecords + 1;
+					else
+					{
+						//首项纪录时间不相等  数据不重叠，保留最新数据
+						nNewIndex = 0;
+					}
+				}
+				else
+				{
+					//新数据项较少情况，检查是否为补充数据  
+					//若首纪录相等，丢弃该数据
+					return false;
+
+					/*
+					if (ptr->m_nDate == m_pCapitalFlow[i].m_nDate
+						&& ptr->m_nTime == m_pCapitalFlow[i].m_nTime
+						&& ptr->m_dblSmallBuy == m_pCapitalFlow[i].m_dblSmallBuy
+						&& ptr->m_dblSmallSell == m_pCapitalFlow[i].m_dblSmallSell)
+							return false;
+					else
+						//若首纪录不相等，可能是新股票的数据，丢弃该数据
+						return false;
+					*/
+				}
 		}
 		else
 		{
@@ -956,14 +989,13 @@ public:
 				//数据相同时返回false，减少无关处理
 				return false;
 			}
-			
-
 
 		}
 
+		m_nCapitalFlowRecords = min(nNewCount, MAX_KLINE_COUNT);
 		EnterCriticalSection(&csMainFlowLock);
 
-		for (i = nNewIndex; i < min(nNewCount,MAX_KLINE_COUNT); i++)
+		for (i = nNewIndex; i <m_nCapitalFlowRecords; i++)
 		{
 			ptr = (CAPITALFLOWSTRUCK*)((BYTE*)pcds->lpData + i * sizeof(CAPITALFLOWSTRUCK));
 			memcpy_s(&m_pCapitalFlow[i], sizeof(CAPITALFLOWSTRUCK),
